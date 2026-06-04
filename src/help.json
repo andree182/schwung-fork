@@ -26,21 +26,22 @@
           "title": "Global",
           "lines": [
             "Mode: split/recv",
-            "Main Oct: transpose",
-            "lowest notes.",
+            "Transpose: oct",
+            "transpose for",
+            "main & received",
+            "notes.",
             "Recv Pipe: select",
-            "input source.",
-            "Recv Chan: target",
-            "MIDI channel."
+            "input source."
           ]
         },
         {
           "title": "Split 1 & 2",
           "lines": [
             "Oct: split point",
-            "Trans: transpose",
             "Chan: new channel",
-            "Pipe: output pipe"
+            "Pipe: output pipe",
+            "or 'off' to route",
+            "to current track."
           ]
         }
       ]

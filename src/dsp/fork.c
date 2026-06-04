@@ -73,11 +73,6 @@ static inline int ring_buffer_pop(ring_buffer_t *rb, uint8_t *out_msg, uint8_t *
     return 1;
 }
 
-typedef struct {
-    int is_relative;
-    int val;
-} chan_setting_t;
-
 typedef enum {
     STATE_READ_LEN = 0,
     STATE_READ_DATA
@@ -94,11 +89,9 @@ typedef struct {
     int mode; // 0 = Splitter, 1 = Receiver
     int split_oct_1; // -1 if Off, else 0-9
     int split_oct_2; // -1 if Off, else 0-9
-    int split_1_oct_trans;
-    int split_2_oct_trans;
-    int main_oct_trans;
-    chan_setting_t split1_chan;
-    chan_setting_t split2_chan;
+    int transpose;
+    int split1_chan; // absolute channel index 0-15
+    int split2_chan; // absolute channel index 0-15
 
     char split1_path[256];
     char split2_path[256];
@@ -126,17 +119,9 @@ typedef struct {
 
     char pipe_1_select[64];
     char pipe_2_select[64];
-    char pipe_1_custom[64];
-    char pipe_2_custom[64];
     char recv_pipe_select[64];
-    char recv_pipe_custom[64];
     char split_1_chan_str[64];
     char split_2_chan_str[64];
-
-    // Receiver channel override
-    // -1 = track (map to slot_recv_channel), -2 = as_is, 0-15 = absolute channel index
-    int recv_chan;
-    char recv_chan_str[64];
 
     char chain_params_json[16384];
     int chain_params_len;
@@ -165,54 +150,22 @@ static void get_fifo_path(const char *name, char *buf, size_t buf_len) {
     }
 }
 
-static void resolve_pipe_path(const char *select_val, const char *custom_val, const char *default_name, char *out_path, size_t max_len) {
-    const char *name = default_name;
-    if (select_val && strcmp(select_val, "custom") != 0) {
-        name = select_val;
-    } else if (custom_val && custom_val[0]) {
-        name = custom_val;
+static void resolve_pipe_path(const char *select_val, const char *default_name, char *out_path, size_t max_len) {
+    char name[64];
+    if (select_val && select_val[0] >= '1' && select_val[0] <= '8' && select_val[1] == '\0') {
+        snprintf(name, sizeof(name), "midifork%c", select_val[0]);
+    } else {
+        snprintf(name, sizeof(name), "%s", default_name);
     }
     get_fifo_path(name, out_path, max_len);
 }
 
-static void parse_chan_setting(const char *str, chan_setting_t *setting, int default_val, int default_relative) {
-    if (!str || !str[0]) {
-        setting->is_relative = default_relative;
-        setting->val = default_val;
-        return;
-    }
-    if (str[0] == '+') {
-        setting->is_relative = 1;
-        setting->val = atoi(str + 1);
-    } else if (str[0] == '-') {
-        setting->is_relative = 1;
-        setting->val = -atoi(str + 1);
-    } else {
-        int abs_val = atoi(str);
-        if (abs_val >= 1 && abs_val <= 16) {
-            setting->is_relative = 0;
-            setting->val = abs_val - 1;
-        } else {
-            setting->is_relative = default_relative;
-            setting->val = default_val;
-        }
-    }
-}
-
-static uint8_t adjust_channel(uint8_t status, chan_setting_t setting) {
+static uint8_t adjust_channel(uint8_t status, int target_chan) {
     if (status >= 0xF0) {
         return status;
     }
     uint8_t type = status & 0xF0;
-    uint8_t orig_chan = status & 0x0F;
-    int new_chan;
-    if (setting.is_relative) {
-        new_chan = (orig_chan + setting.val) % 16;
-        if (new_chan < 0) new_chan += 16;
-    } else {
-        new_chan = setting.val;
-    }
-    return type | (uint8_t)(new_chan & 0x0F);
+    return type | (uint8_t)(target_chan & 0x0F);
 }
 
 static int parse_split_octave(const char *val) {
@@ -366,7 +319,7 @@ static void* io_thread_func(void *arg) {
 
         if (local_mode == 0) {
             // Splitter Mode
-            if (inst->split_oct_1 >= 0) {
+            if (inst->split_oct_1 >= 0 && strcmp(inst->pipe_1_select, "off") != 0) {
                 if (inst->split1_fd < 0) {
                     mkfifo(inst->split1_path, 0666);
                     int fd = open(inst->split1_path, O_WRONLY | O_NONBLOCK);
@@ -378,7 +331,7 @@ static void* io_thread_func(void *arg) {
                 if (inst->split1_fd >= 0) { close(inst->split1_fd); inst->split1_fd = -1; }
             }
 
-            if (inst->split_oct_2 >= 0) {
+            if (inst->split_oct_2 >= 0 && strcmp(inst->pipe_2_select, "off") != 0) {
                 if (inst->split2_fd < 0) {
                     mkfifo(inst->split2_path, 0666);
                     int fd = open(inst->split2_path, O_WRONLY | O_NONBLOCK);
@@ -392,7 +345,7 @@ static void* io_thread_func(void *arg) {
 
             uint8_t msg[3];
             uint8_t len;
-            if (inst->split_oct_1 >= 0) {
+            if (inst->split_oct_1 >= 0 && strcmp(inst->pipe_1_select, "off") != 0) {
                 if (inst->split1_fd >= 0) {
                     while (ring_buffer_pop(&inst->split1_ring_buf, msg, &len)) {
                         uint8_t frame[4];
@@ -414,7 +367,7 @@ static void* io_thread_func(void *arg) {
                 }
             }
 
-            if (inst->split_oct_2 >= 0) {
+            if (inst->split_oct_2 >= 0 && strcmp(inst->pipe_2_select, "off") != 0) {
                 if (inst->split2_fd >= 0) {
                     while (ring_buffer_pop(&inst->split2_ring_buf, msg, &len)) {
                         uint8_t frame[4];
@@ -497,26 +450,16 @@ static void* fork_create_instance(const char *module_dir, const char *config_jso
     inst->mode = 0;
     inst->split_oct_1 = -1;
     inst->split_oct_2 = -1;
-    inst->split_1_oct_trans = 0;
-    inst->split_2_oct_trans = 0;
-    inst->main_oct_trans = 0;
+    inst->transpose = 0;
 
-    inst->split1_chan.is_relative = 1;
-    inst->split1_chan.val = 4;
-    inst->split2_chan.is_relative = 1;
-    inst->split2_chan.val = 5;
+    inst->split1_chan = 0;
+    inst->split2_chan = 1;
 
-    strcpy(inst->pipe_1_select, "midifork1");
-    strcpy(inst->pipe_2_select, "midifork2");
-    strcpy(inst->pipe_1_custom, "midifork1");
-    strcpy(inst->pipe_2_custom, "midifork2");
-    strcpy(inst->recv_pipe_select, "midifork1");
-    strcpy(inst->recv_pipe_custom, "midifork1");
-    strcpy(inst->split_1_chan_str, "+4");
-    strcpy(inst->split_2_chan_str, "+5");
-
-    inst->recv_chan = -1; // track
-    strcpy(inst->recv_chan_str, "track");
+    strcpy(inst->pipe_1_select, "1");
+    strcpy(inst->pipe_2_select, "2");
+    strcpy(inst->recv_pipe_select, "1");
+    strcpy(inst->split_1_chan_str, "1");
+    strcpy(inst->split_2_chan_str, "2");
 
     memset(inst->active_note_dest, 0xFF, sizeof(inst->active_note_dest));
 
@@ -530,9 +473,9 @@ static void* fork_create_instance(const char *module_dir, const char *config_jso
     inst->split2_fd = -1;
     inst->recv_fd = -1;
 
-    resolve_pipe_path(inst->pipe_1_select, inst->pipe_1_custom, "midifork1", inst->split1_path, sizeof(inst->split1_path));
-    resolve_pipe_path(inst->pipe_2_select, inst->pipe_2_custom, "midifork2", inst->split2_path, sizeof(inst->split2_path));
-    resolve_pipe_path(inst->recv_pipe_select, inst->recv_pipe_custom, "midifork1", inst->recv_path, sizeof(inst->recv_path));
+    resolve_pipe_path(inst->pipe_1_select, "midifork1", inst->split1_path, sizeof(inst->split1_path));
+    resolve_pipe_path(inst->pipe_2_select, "midifork2", inst->split2_path, sizeof(inst->split2_path));
+    resolve_pipe_path(inst->recv_pipe_select, "midifork1", inst->recv_path, sizeof(inst->recv_path));
 
     strcpy(inst->next_split1_path, inst->split1_path);
     strcpy(inst->next_split2_path, inst->split2_path);
@@ -640,7 +583,7 @@ static int fork_process_midi(void *instance,
         }
 
         if (dest == 0) {
-            int new_note = note + inst->main_oct_trans * 12;
+            int new_note = note + inst->transpose * 12;
             new_note = clamp_int(new_note, 0, 127);
             out_msgs[0][0] = status;
             out_msgs[0][1] = (uint8_t)new_note;
@@ -648,39 +591,57 @@ static int fork_process_midi(void *instance,
             out_lens[0] = in_len;
             return 1;
         } else if (dest == 1) {
-            int new_note = note + inst->split_1_oct_trans * 12;
-            new_note = clamp_int(new_note, 0, 127);
+            int new_note = note;
             uint8_t out_msg[3];
             out_msg[0] = adjust_channel(status, inst->split1_chan);
             out_msg[1] = (uint8_t)new_note;
             out_msg[2] = vel_or_press;
-            ring_buffer_push(&inst->split1_ring_buf, out_msg, in_len);
-            if (g_host && g_host->midi_inject_to_move && type == 0x90 && vel_or_press > 0) {
-                uint8_t target_chan = out_msg[0] & 0x0F;
-                uint8_t inject_pkt[4] = { 0x2B, (uint8_t)(0xB0 | target_chan), 119, 0 };
-                g_host->midi_inject_to_move(inject_pkt, 4);
+            if (strcmp(inst->pipe_1_select, "off") == 0) {
+                out_msgs[0][0] = out_msg[0];
+                out_msgs[0][1] = out_msg[1];
+                out_msgs[0][2] = out_msg[2];
+                out_lens[0] = in_len;
+                return 1;
+            } else {
+                ring_buffer_push(&inst->split1_ring_buf, out_msg, in_len);
+                if (g_host && g_host->midi_inject_to_move && type == 0x90 && vel_or_press > 0) {
+                    uint8_t target_chan = out_msg[0] & 0x0F;
+                    uint8_t inject_pkt[4] = { 0x2B, (uint8_t)(0xB0 | target_chan), 119, 0 };
+                    g_host->midi_inject_to_move(inject_pkt, 4);
+                }
+                return 0;
             }
-            return 0;
         } else {
-            int new_note = note + inst->split_2_oct_trans * 12;
-            new_note = clamp_int(new_note, 0, 127);
+            int new_note = note;
             uint8_t out_msg[3];
             out_msg[0] = adjust_channel(status, inst->split2_chan);
             out_msg[1] = (uint8_t)new_note;
             out_msg[2] = vel_or_press;
-            ring_buffer_push(&inst->split2_ring_buf, out_msg, in_len);
-            if (g_host && g_host->midi_inject_to_move && type == 0x90 && vel_or_press > 0) {
-                uint8_t target_chan = out_msg[0] & 0x0F;
-                uint8_t inject_pkt[4] = { 0x2B, (uint8_t)(0xB0 | target_chan), 119, 0 };
-                g_host->midi_inject_to_move(inject_pkt, 4);
+            if (strcmp(inst->pipe_2_select, "off") == 0) {
+                out_msgs[0][0] = out_msg[0];
+                out_msgs[0][1] = out_msg[1];
+                out_msgs[0][2] = out_msg[2];
+                out_lens[0] = in_len;
+                return 1;
+            } else {
+                ring_buffer_push(&inst->split2_ring_buf, out_msg, in_len);
+                if (g_host && g_host->midi_inject_to_move && type == 0x90 && vel_or_press > 0) {
+                    uint8_t target_chan = out_msg[0] & 0x0F;
+                    uint8_t inject_pkt[4] = { 0x2B, (uint8_t)(0xB0 | target_chan), 119, 0 };
+                    g_host->midi_inject_to_move(inject_pkt, 4);
+                }
+                return 0;
             }
-            return 0;
         }
     }
 
     if (status >= 0x80 && status < 0xF8) {
-        memcpy(out_msgs[0], in_msg, in_len);
-        out_lens[0] = in_len;
+        int out_count = 0;
+        if (out_count < max_out) {
+            memcpy(out_msgs[out_count], in_msg, in_len);
+            out_lens[out_count] = in_len;
+            out_count++;
+        }
         
         int s1 = (inst->split_oct_1 >= 0) ? (inst->split_oct_1 * 12) : -1;
         int s2 = (inst->split_oct_2 >= 0) ? (inst->split_oct_2 * 12) : -1;
@@ -689,15 +650,31 @@ static int fork_process_midi(void *instance,
             uint8_t out_msg[3];
             memcpy(out_msg, in_msg, in_len);
             out_msg[0] = adjust_channel(status, inst->split1_chan);
-            ring_buffer_push(&inst->split1_ring_buf, out_msg, in_len);
+            if (strcmp(inst->pipe_1_select, "off") == 0) {
+                if (out_count < max_out) {
+                    memcpy(out_msgs[out_count], out_msg, in_len);
+                    out_lens[out_count] = in_len;
+                    out_count++;
+                }
+            } else {
+                ring_buffer_push(&inst->split1_ring_buf, out_msg, in_len);
+            }
         }
         if (s2 >= 0) {
             uint8_t out_msg[3];
             memcpy(out_msg, in_msg, in_len);
             out_msg[0] = adjust_channel(status, inst->split2_chan);
-            ring_buffer_push(&inst->split2_ring_buf, out_msg, in_len);
+            if (strcmp(inst->pipe_2_select, "off") == 0) {
+                if (out_count < max_out) {
+                    memcpy(out_msgs[out_count], out_msg, in_len);
+                    out_lens[out_count] = in_len;
+                    out_count++;
+                }
+            } else {
+                ring_buffer_push(&inst->split2_ring_buf, out_msg, in_len);
+            }
         }
-        return 1;
+        return out_count;
     }
 
     if (status >= 0xF8) {
@@ -721,26 +698,12 @@ static int fork_tick(void *instance, int frames, int sample_rate,
         uint8_t msg[3];
         uint8_t len;
         while (count < max_out && ring_buffer_pop(&inst->recv_ring_buf, msg, &len)) {
-            if (len >= 1) {
+            if (len >= 3) {
                 uint8_t status = msg[0];
-                if (status >= 0x80 && status < 0xF0) {
-                    int target_chan = -1;
-                    if (inst->recv_chan == -1) {
-                        int tc = 0;
-                        if (g_host && g_host->slot_recv_channel) {
-                            int rc = g_host->slot_recv_channel(inst);
-                            if (rc >= 0 && rc < 16) {
-                                tc = rc;
-                            }
-                        }
-                        target_chan = tc;
-                    } else if (inst->recv_chan >= 0 && inst->recv_chan < 16) {
-                        target_chan = inst->recv_chan;
-                    }
-
-                    if (target_chan >= 0 && target_chan < 16) {
-                        msg[0] = (status & 0xF0) | (uint8_t)target_chan;
-                    }
+                uint8_t type = status & 0xF0;
+                if (type == 0x90 || type == 0x80 || type == 0xA0) {
+                    int note = msg[1] + inst->transpose * 12;
+                    msg[1] = (uint8_t)clamp_int(note, 0, 127);
                 }
             }
             memcpy(out_msgs[count], msg, len);
@@ -772,24 +735,28 @@ static void fork_set_param(void *instance, const char *key, const char *val) {
     else if (strcmp(key, "split_oct_2") == 0) {
         inst->split_oct_2 = parse_split_octave(val);
     }
-    else if (strcmp(key, "main_oct_trans") == 0) {
-        inst->main_oct_trans = clamp_int(atoi(val), -4, 4);
-    }
-    else if (strcmp(key, "split_1_oct_trans") == 0) {
-        inst->split_1_oct_trans = clamp_int(atoi(val), -4, 4);
-    }
-    else if (strcmp(key, "split_2_oct_trans") == 0) {
-        inst->split_2_oct_trans = clamp_int(atoi(val), -4, 4);
+    else if (strcmp(key, "transpose") == 0) {
+        inst->transpose = clamp_int(atoi(val), -10, 10);
     }
     else if (strcmp(key, "split_1_chan") == 0) {
         strncpy(inst->split_1_chan_str, val, sizeof(inst->split_1_chan_str) - 1);
         inst->split_1_chan_str[sizeof(inst->split_1_chan_str) - 1] = '\0';
-        parse_chan_setting(val, &inst->split1_chan, 4, 1);
+        int ch = atoi(val);
+        if (ch >= 1 && ch <= 16) {
+            inst->split1_chan = ch - 1;
+        } else {
+            inst->split1_chan = 0;
+        }
     }
     else if (strcmp(key, "split_2_chan") == 0) {
         strncpy(inst->split_2_chan_str, val, sizeof(inst->split_2_chan_str) - 1);
         inst->split_2_chan_str[sizeof(inst->split_2_chan_str) - 1] = '\0';
-        parse_chan_setting(val, &inst->split2_chan, 5, 1);
+        int ch = atoi(val);
+        if (ch >= 1 && ch <= 16) {
+            inst->split2_chan = ch - 1;
+        } else {
+            inst->split2_chan = 0;
+        }
     }
     else if (strcmp(key, "pipe_1_select") == 0) {
         strncpy(inst->pipe_1_select, val, sizeof(inst->pipe_1_select) - 1);
@@ -801,41 +768,10 @@ static void fork_set_param(void *instance, const char *key, const char *val) {
         inst->pipe_2_select[sizeof(inst->pipe_2_select) - 1] = '\0';
         path_changed = 1;
     }
-    else if (strcmp(key, "pipe_1_custom") == 0) {
-        strncpy(inst->pipe_1_custom, val, sizeof(inst->pipe_1_custom) - 1);
-        inst->pipe_1_custom[sizeof(inst->pipe_1_custom) - 1] = '\0';
-        path_changed = 1;
-    }
-    else if (strcmp(key, "pipe_2_custom") == 0) {
-        strncpy(inst->pipe_2_custom, val, sizeof(inst->pipe_2_custom) - 1);
-        inst->pipe_2_custom[sizeof(inst->pipe_2_custom) - 1] = '\0';
-        path_changed = 1;
-    }
     else if (strcmp(key, "recv_pipe_select") == 0) {
         strncpy(inst->recv_pipe_select, val, sizeof(inst->recv_pipe_select) - 1);
         inst->recv_pipe_select[sizeof(inst->recv_pipe_select) - 1] = '\0';
         path_changed = 1;
-    }
-    else if (strcmp(key, "recv_pipe_custom") == 0) {
-        strncpy(inst->recv_pipe_custom, val, sizeof(inst->recv_pipe_custom) - 1);
-        inst->recv_pipe_custom[sizeof(inst->recv_pipe_custom) - 1] = '\0';
-        path_changed = 1;
-    }
-    else if (strcmp(key, "recv_chan") == 0) {
-        strncpy(inst->recv_chan_str, val, sizeof(inst->recv_chan_str) - 1);
-        inst->recv_chan_str[sizeof(inst->recv_chan_str) - 1] = '\0';
-        if (strcmp(val, "track") == 0) {
-            inst->recv_chan = -1;
-        } else if (strcmp(val, "as_is") == 0) {
-            inst->recv_chan = -2;
-        } else {
-            int ch = atoi(val);
-            if (ch >= 1 && ch <= 16) {
-                inst->recv_chan = ch - 1;
-            } else {
-                inst->recv_chan = -1;
-            }
-        }
     }
     else if (strcmp(key, "state") == 0) {
         char s[64];
@@ -843,25 +779,19 @@ static void fork_set_param(void *instance, const char *key, const char *val) {
         if (json_get_string(val, "mode", s, sizeof(s))) fork_set_param(inst, "mode", s);
         if (json_get_string(val, "split_oct_1", s, sizeof(s))) fork_set_param(inst, "split_oct_1", s);
         if (json_get_string(val, "split_oct_2", s, sizeof(s))) fork_set_param(inst, "split_oct_2", s);
-        if (json_get_int(val, "main_oct_trans", &i)) { snprintf(s, sizeof(s), "%d", i); fork_set_param(inst, "main_oct_trans", s); }
-        if (json_get_int(val, "split_1_oct_trans", &i)) { snprintf(s, sizeof(s), "%d", i); fork_set_param(inst, "split_1_oct_trans", s); }
-        if (json_get_int(val, "split_2_oct_trans", &i)) { snprintf(s, sizeof(s), "%d", i); fork_set_param(inst, "split_2_oct_trans", s); }
+        if (json_get_int(val, "transpose", &i)) { snprintf(s, sizeof(s), "%d", i); fork_set_param(inst, "transpose", s); }
         if (json_get_string(val, "split_1_chan", s, sizeof(s))) fork_set_param(inst, "split_1_chan", s);
         if (json_get_string(val, "split_2_chan", s, sizeof(s))) fork_set_param(inst, "split_2_chan", s);
         if (json_get_string(val, "pipe_1_select", s, sizeof(s))) fork_set_param(inst, "pipe_1_select", s);
         if (json_get_string(val, "pipe_2_select", s, sizeof(s))) fork_set_param(inst, "pipe_2_select", s);
-        if (json_get_string(val, "pipe_1_custom", s, sizeof(s))) fork_set_param(inst, "pipe_1_custom", s);
-        if (json_get_string(val, "pipe_2_custom", s, sizeof(s))) fork_set_param(inst, "pipe_2_custom", s);
         if (json_get_string(val, "recv_pipe_select", s, sizeof(s))) fork_set_param(inst, "recv_pipe_select", s);
-        if (json_get_string(val, "recv_pipe_custom", s, sizeof(s))) fork_set_param(inst, "recv_pipe_custom", s);
-        if (json_get_string(val, "recv_chan", s, sizeof(s))) fork_set_param(inst, "recv_chan", s);
     }
 
     if (path_changed) {
         pthread_mutex_lock(&inst->path_mutex);
-        resolve_pipe_path(inst->pipe_1_select, inst->pipe_1_custom, "midifork1", inst->next_split1_path, sizeof(inst->next_split1_path));
-        resolve_pipe_path(inst->pipe_2_select, inst->pipe_2_custom, "midifork2", inst->next_split2_path, sizeof(inst->next_split2_path));
-        resolve_pipe_path(inst->recv_pipe_select, inst->recv_pipe_custom, "midifork1", inst->next_recv_path, sizeof(inst->next_recv_path));
+        resolve_pipe_path(inst->pipe_1_select, "midifork1", inst->next_split1_path, sizeof(inst->next_split1_path));
+        resolve_pipe_path(inst->pipe_2_select, "midifork2", inst->next_split2_path, sizeof(inst->next_split2_path));
+        resolve_pipe_path(inst->recv_pipe_select, "midifork1", inst->next_recv_path, sizeof(inst->next_recv_path));
         inst->paths_dirty = 1;
         pthread_mutex_unlock(&inst->path_mutex);
     }
@@ -880,14 +810,8 @@ static int fork_get_param(void *instance, const char *key, char *buf, int buf_le
     if (strcmp(key, "split_oct_2") == 0) {
         return snprintf(buf, buf_len, "%s", format_split_octave(inst->split_oct_2));
     }
-    if (strcmp(key, "main_oct_trans") == 0) {
-        return snprintf(buf, buf_len, "%d", inst->main_oct_trans);
-    }
-    if (strcmp(key, "split_1_oct_trans") == 0) {
-        return snprintf(buf, buf_len, "%d", inst->split_1_oct_trans);
-    }
-    if (strcmp(key, "split_2_oct_trans") == 0) {
-        return snprintf(buf, buf_len, "%d", inst->split_2_oct_trans);
+    if (strcmp(key, "transpose") == 0) {
+        return snprintf(buf, buf_len, "%d", inst->transpose);
     }
     if (strcmp(key, "split_1_chan") == 0) {
         return snprintf(buf, buf_len, "%s", inst->split_1_chan_str);
@@ -901,20 +825,8 @@ static int fork_get_param(void *instance, const char *key, char *buf, int buf_le
     if (strcmp(key, "pipe_2_select") == 0) {
         return snprintf(buf, buf_len, "%s", inst->pipe_2_select);
     }
-    if (strcmp(key, "pipe_1_custom") == 0) {
-        return snprintf(buf, buf_len, "%s", inst->pipe_1_custom);
-    }
-    if (strcmp(key, "pipe_2_custom") == 0) {
-        return snprintf(buf, buf_len, "%s", inst->pipe_2_custom);
-    }
     if (strcmp(key, "recv_pipe_select") == 0) {
         return snprintf(buf, buf_len, "%s", inst->recv_pipe_select);
-    }
-    if (strcmp(key, "recv_pipe_custom") == 0) {
-        return snprintf(buf, buf_len, "%s", inst->recv_pipe_custom);
-    }
-    if (strcmp(key, "recv_chan") == 0) {
-        return snprintf(buf, buf_len, "%s", inst->recv_chan_str);
     }
     if (strcmp(key, "name") == 0) {
         return snprintf(buf, buf_len, "Fork");
@@ -930,25 +842,19 @@ static int fork_get_param(void *instance, const char *key, char *buf, int buf_le
     }
     if (strcmp(key, "state") == 0) {
         return snprintf(buf, buf_len,
-            "{\"mode\":\"%s\",\"split_oct_1\":\"%s\",\"split_oct_2\":\"%s\",\"main_oct_trans\":%d,"
-            "\"split_1_oct_trans\":%d,\"split_2_oct_trans\":%d,\"split_1_chan\":\"%s\",\"split_2_chan\":\"%s\","
-            "\"pipe_1_select\":\"%s\",\"pipe_2_select\":\"%s\",\"pipe_1_custom\":\"%s\",\"pipe_2_custom\":\"%s\","
-            "\"recv_pipe_select\":\"%s\",\"recv_pipe_custom\":\"%s\",\"recv_chan\":\"%s\"}",
+            "{\"mode\":\"%s\",\"split_oct_1\":\"%s\",\"split_oct_2\":\"%s\",\"transpose\":%d,"
+            "\"split_1_chan\":\"%s\",\"split_2_chan\":\"%s\","
+            "\"pipe_1_select\":\"%s\",\"pipe_2_select\":\"%s\","
+            "\"recv_pipe_select\":\"%s\"}",
             inst->mode ? "receiver" : "splitter",
             format_split_octave(inst->split_oct_1),
             format_split_octave(inst->split_oct_2),
-            inst->main_oct_trans,
-            inst->split_1_oct_trans,
-            inst->split_2_oct_trans,
+            inst->transpose,
             inst->split_1_chan_str,
             inst->split_2_chan_str,
             inst->pipe_1_select,
             inst->pipe_2_select,
-            inst->pipe_1_custom,
-            inst->pipe_2_custom,
-            inst->recv_pipe_select,
-            inst->recv_pipe_custom,
-            inst->recv_chan_str
+            inst->recv_pipe_select
         );
     }
     return -1;
