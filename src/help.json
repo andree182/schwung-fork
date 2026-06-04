@@ -1,0 +1,49 @@
+{
+  "title": "Fork Splitter",
+  "children": [
+    {
+      "title": "Overview",
+      "lines": [
+        "MIDI Splitter",
+        "and Router.",
+        "Splits by octave",
+        "to pipes & tracks."
+      ]
+    },
+    {
+      "title": "Modes",
+      "lines": [
+        "Splitter: sends",
+        "splits to pipes.",
+        "Receiver: replays",
+        "MIDI from pipes."
+      ]
+    },
+    {
+      "title": "Menus",
+      "children": [
+        {
+          "title": "Global",
+          "lines": [
+            "Mode: split/recv",
+            "Main Oct: transpose",
+            "lowest notes.",
+            "Recv Pipe: select",
+            "input source.",
+            "Recv Chan: target",
+            "MIDI channel."
+          ]
+        },
+        {
+          "title": "Split 1 & 2",
+          "lines": [
+            "Oct: split point",
+            "Trans: transpose",
+            "Chan: new channel",
+            "Pipe: output pipe"
+          ]
+        }
+      ]
+    }
+  ]
+}

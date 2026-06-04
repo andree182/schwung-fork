@@ -1,0 +1,54 @@
+{
+  "api_version": 1,
+  "id": "fork",
+  "name": "Fork",
+  "abbrev": "Fork",
+  "version": "1.0.0",
+  "builtin": false,
+  "capabilities": {
+    "chainable": true,
+    "component_type": "midi_fx"
+  },
+  "ui_hierarchy": {
+    "levels": {
+      "root": {
+        "name": "Fork Splitter",
+        "params": [
+          { "label": "Global", "level": "global" },
+          { "label": "Split 1", "level": "split1" },
+          { "label": "Split 2", "level": "split2" }
+        ],
+        "knobs": ["mode", "split_oct_1", "split_oct_2", "recv_pipe_select"]
+      },
+      "global": {
+        "name": "Global Settings",
+        "params": ["mode", "main_oct_trans", "recv_pipe_select", "recv_chan"],
+        "knobs": ["mode", "main_oct_trans", "recv_pipe_select", "recv_chan"]
+      },
+      "split1": {
+        "name": "Split 1 Settings",
+        "params": ["split_oct_1", "split_1_oct_trans", "split_1_chan", "pipe_1_select"],
+        "knobs": ["split_oct_1", "split_1_oct_trans", "split_1_chan", "pipe_1_select"]
+      },
+      "split2": {
+        "name": "Split 2 Settings",
+        "params": ["split_oct_2", "split_2_oct_trans", "split_2_chan", "pipe_2_select"],
+        "knobs": ["split_oct_2", "split_2_oct_trans", "split_2_chan", "pipe_2_select"]
+      }
+    }
+  },
+  "chain_params": [
+    { "key": "mode", "name": "Mode", "type": "enum", "options": ["splitter", "receiver"] },
+    { "key": "split_oct_1", "name": "Split 1 Oct", "type": "enum", "options": ["off", "C-1", "C0", "C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8"] },
+    { "key": "split_oct_2", "name": "Split 2 Oct", "type": "enum", "options": ["off", "C-1", "C0", "C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8"] },
+    { "key": "main_oct_trans", "name": "Main Oct Trans", "type": "int", "min": -4, "max": 4, "step": 1 },
+    { "key": "split_1_oct_trans", "name": "Split 1 Trans", "type": "int", "min": -4, "max": 4, "step": 1 },
+    { "key": "split_2_oct_trans", "name": "Split 2 Trans", "type": "int", "min": -4, "max": 4, "step": 1 },
+    { "key": "split_1_chan", "name": "Split 1 Chan", "type": "enum", "options": ["+0", "+1", "+2", "+3", "+4", "+5", "+6", "+7", "+8", "+9", "+10", "+11", "+12", "+13", "+14", "+15", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16"] },
+    { "key": "split_2_chan", "name": "Split 2 Chan", "type": "enum", "options": ["+0", "+1", "+2", "+3", "+4", "+5", "+6", "+7", "+8", "+9", "+10", "+11", "+12", "+13", "+14", "+15", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16"] },
+    { "key": "pipe_1_select", "name": "Pipe 1", "type": "enum", "options": ["midifork1", "midifork2", "midifork3", "midifork4", "midifork5", "midifork6", "midifork7", "midifork8", "custom"] },
+    { "key": "pipe_2_select", "name": "Pipe 2", "type": "enum", "options": ["midifork1", "midifork2", "midifork3", "midifork4", "midifork5", "midifork6", "midifork7", "midifork8", "custom"] },
+    { "key": "recv_pipe_select", "name": "Recv Pipe", "type": "enum", "options": ["midifork1", "midifork2", "midifork3", "midifork4", "midifork5", "midifork6", "midifork7", "midifork8", "custom"] },
+    { "key": "recv_chan", "name": "Recv Chan", "type": "enum", "options": ["track", "as_is", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16"] }
+  ]
+}

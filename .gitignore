@@ -1,0 +1,16 @@
+# Build outputs
+build/
+dist/
+
+# Local/dev-only artifacts
+.backup/
+agentfiles/
+scripts/build-local.sh
+scripts/install-local.sh
+
+# Logs
+*.log
+
+# OS/editor
+.DS_Store
+Thumbs.db
