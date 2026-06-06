@@ -31,6 +31,11 @@
 #include "host/midi_fx_api_v1.h"
 #include "host/plugin_api_v1.h"
 
+#if defined(__aarch64__)
+__asm__(".symver pthread_create, pthread_create@GLIBC_2.17");
+__asm__(".symver pthread_join, pthread_join@GLIBC_2.17");
+#endif
+
 #define RING_BUFFER_SIZE 512
 
 typedef struct {
@@ -140,10 +145,9 @@ static void get_fifo_path(const char *name, char *buf, size_t buf_len) {
         snprintf(buf, buf_len, "%s", name);
         return;
     }
-    struct stat st;
-    if (stat("/data/UserData/schwung", &st) == 0 && S_ISDIR(st.st_mode)) {
+    if (access("/data/UserData/schwung", F_OK) == 0) {
         snprintf(buf, buf_len, "/data/UserData/schwung/%s", name);
-    } else if (stat("/data/UserData", &st) == 0 && S_ISDIR(st.st_mode)) {
+    } else if (access("/data/UserData", F_OK) == 0) {
         snprintf(buf, buf_len, "/data/UserData/%s", name);
     } else {
         snprintf(buf, buf_len, "./%s", name);
