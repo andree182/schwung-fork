@@ -39,11 +39,14 @@ int main(void) {
     assert(fork_inst->mode == 0);
     assert(fork_inst->split_oct_1 == -1);
     assert(fork_inst->split_oct_2 == -1);
+    assert(fork_inst->split_oct_3 == -1);
     assert(fork_inst->transpose == 0);
     assert(fork_inst->split1_chan == 0); // Absolute index 0
     assert(fork_inst->split2_chan == 1); // Absolute index 1
+    assert(fork_inst->split3_chan == 2); // Absolute index 2
     assert(strcmp(fork_inst->pipe_1_select, "1") == 0);
     assert(strcmp(fork_inst->pipe_2_select, "2") == 0);
+    assert(strcmp(fork_inst->pipe_3_select, "3") == 0);
     assert(strcmp(fork_inst->recv_pipe_select, "1") == 0);
 
     // 2. Verify Parameter Roundtrips
@@ -85,8 +88,17 @@ int main(void) {
     api->set_param(inst, "split_2_chan", "5"); // Absolute channel 5 -> index 4
     assert(fork_inst->split2_chan == 4);
 
+    api->set_param(inst, "split_3_chan", "16"); // Absolute channel 16 -> index 15
+    assert(fork_inst->split3_chan == 15);
+
     api->set_param(inst, "pipe_1_select", "3");
     assert(strcmp(fork_inst->pipe_1_select, "3") == 0);
+
+    api->set_param(inst, "pipe_3_select", "4");
+    assert(strcmp(fork_inst->pipe_3_select, "4") == 0);
+
+    api->set_param(inst, "split_oct_3", "C5"); // Octave 6, Note 72
+    assert(fork_inst->split_oct_3 == 6);
 
     // 3. Test Routing in Splitter Mode
     // split_oct_1 = C3 (48), split_oct_2 = C4 (60)
@@ -122,7 +134,7 @@ int main(void) {
     assert(pop_msg[1] == 50);   // Untransposed
     assert(pop_msg[2] == 100);
 
-    // C. Split 2 Note: Note 64 (E4 >= 60)
+    // C. Split 2 Note: Note 64 (E4 >= 60 and < 72)
     uint8_t note_split2[3] = { 0x91, 64, 90 };
     count = api->process_midi(inst, note_split2, 3, out_msgs, out_lens, 16);
     assert(count == 0); // Intercepted
@@ -134,6 +146,19 @@ int main(void) {
     assert(pop_msg[0] == 0x94); // Absolute channel 5 -> index 4
     assert(pop_msg[1] == 64);   // Untransposed
     assert(pop_msg[2] == 90);
+
+    // D. Split 3 Note: Note 75 (D5 >= 72)
+    uint8_t note_split3[3] = { 0x90, 75, 100 };
+    count = api->process_midi(inst, note_split3, 3, out_msgs, out_lens, 16);
+    assert(count == 0); // Intercepted
+
+    // Inspect Split 3 buffer
+    pop_ok = ring_buffer_pop(&fork_inst->split3_ring_buf, pop_msg, &pop_len);
+    assert(pop_ok == 1);
+    assert(pop_len == 3);
+    assert(pop_msg[0] == 0x9F); // Absolute channel 16 -> index 15
+    assert(pop_msg[1] == 75);   // Untransposed
+    assert(pop_msg[2] == 100);
 
     // 4. Test Active Note Destination Tracking (avoid stuck notes)
     uint8_t note_on_50[3] = { 0x90, 50, 100 };
@@ -174,8 +199,9 @@ int main(void) {
     // 5b. Test Global Message Broadcasting with pipe select "off"
     api->set_param(inst, "pipe_1_select", "off");
     api->set_param(inst, "pipe_2_select", "off");
+    api->set_param(inst, "pipe_3_select", "off");
     count = api->process_midi(inst, cc_msg, 3, out_msgs, out_lens, 16);
-    assert(count == 3); // Main CC + Split 1 CC + Split 2 CC
+    assert(count == 4); // Main CC + Split 1 CC + Split 2 CC + Split 3 CC
     
     assert(out_msgs[0][0] == 0xB0); // Original
     assert(out_msgs[0][1] == 74);
@@ -185,6 +211,9 @@ int main(void) {
     
     assert(out_msgs[2][0] == 0xB4); // Split 2 re-channeled to absolute 5
     assert(out_msgs[2][1] == 74);
+    
+    assert(out_msgs[3][0] == 0xBF); // Split 3 re-channeled to absolute 16 (index 15)
+    assert(out_msgs[3][1] == 74);
 
     // Note splitting directly on track
     // Split 1 Note: Note 50 (D3 >= 48 and < 60)
