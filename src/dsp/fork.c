@@ -36,6 +36,19 @@ __asm__(".symver pthread_create, pthread_create@GLIBC_2.17");
 __asm__(".symver pthread_join, pthread_join@GLIBC_2.17");
 #endif
 
+static const host_api_v1_t *g_host = NULL;
+
+static void fork_log(const char *fmt, ...) {
+    if (g_host && g_host->log) {
+        char buf[512];
+        va_list args;
+        va_start(args, fmt);
+        vsnprintf(buf, sizeof(buf), fmt, args);
+        va_end(args);
+        g_host->log(buf);
+    }
+}
+
 #define RING_BUFFER_SIZE 512
 
 typedef struct {
@@ -138,9 +151,10 @@ typedef struct {
 
     char chain_params_json[16384];
     int chain_params_len;
-} fork_instance_t;
 
-static const host_api_v1_t *g_host = NULL;
+    int fallthrough;
+    char fallthrough_str[64];
+} fork_instance_t;
 
 static int clamp_int(int v, int lo, int hi) {
     if (v < lo) return lo;
@@ -163,13 +177,26 @@ static void get_fifo_path(const char *name, char *buf, size_t buf_len) {
 }
 
 static void resolve_pipe_path(const char *select_val, const char *default_name, char *out_path, size_t max_len) {
-    char name[64];
-    if (select_val && select_val[0] >= '1' && select_val[0] <= '8' && select_val[1] == '\0') {
+    char name[64] = "";
+    if (select_val && strcmp(select_val, "off") == 0) {
+        name[0] = '\0';
+    } else if (select_val && strncmp(select_val, "midifork", 8) == 0 && select_val[8] >= '1' && select_val[8] <= '8' && select_val[9] == '\0') {
+        snprintf(name, sizeof(name), "%s", select_val);
+    } else if (select_val && select_val[0] >= '1' && select_val[0] <= '8' && select_val[1] == '\0') {
         snprintf(name, sizeof(name), "midifork%c", select_val[0]);
-    } else {
-        snprintf(name, sizeof(name), "%s", default_name);
+    } else if (default_name && strcmp(default_name, "off") != 0) {
+        if (strncmp(default_name, "midifork", 8) == 0) {
+            snprintf(name, sizeof(name), "%s", default_name);
+        } else {
+            snprintf(name, sizeof(name), "midifork%s", default_name);
+        }
     }
-    get_fifo_path(name, out_path, max_len);
+    
+    if (name[0]) {
+        get_fifo_path(name, out_path, max_len);
+    } else {
+        out_path[0] = '\0';
+    }
 }
 
 static uint8_t adjust_channel(uint8_t status, int target_chan) {
@@ -182,8 +209,6 @@ static uint8_t adjust_channel(uint8_t status, int target_chan) {
 
 static int parse_split_octave(const char *val) {
     if (!val || strcmp(val, "off") == 0) return -1;
-    if (strcmp(val, "C-1") == 0) return 0;
-    if (strcmp(val, "C0") == 0) return 1;
     if (strcmp(val, "C1") == 0) return 2;
     if (strcmp(val, "C2") == 0) return 3;
     if (strcmp(val, "C3") == 0) return 4;
@@ -192,15 +217,15 @@ static int parse_split_octave(const char *val) {
     if (strcmp(val, "C6") == 0) return 7;
     if (strcmp(val, "C7") == 0) return 8;
     if (strcmp(val, "C8") == 0) return 9;
+    if (strcmp(val, "C9") == 0) return 10;
+    if (strcmp(val, "C10") == 0) return 11;
     
     int n = atoi(val);
-    if (n >= 0 && n <= 9) return n;
+    if (n >= 2 && n <= 11) return n;
     return -1;
 }
 
 static const char* format_split_octave(int oct) {
-    if (oct == 0) return "C-1";
-    if (oct == 1) return "C0";
     if (oct == 2) return "C1";
     if (oct == 3) return "C2";
     if (oct == 4) return "C3";
@@ -209,6 +234,8 @@ static const char* format_split_octave(int oct) {
     if (oct == 7) return "C6";
     if (oct == 8) return "C7";
     if (oct == 9) return "C8";
+    if (oct == 10) return "C9";
+    if (oct == 11) return "C10";
     return "off";
 }
 
@@ -320,10 +347,14 @@ static void* io_thread_func(void *arg) {
         pthread_mutex_unlock(&inst->path_mutex);
 
         if (paths_changed || mode_changed) {
-            if (inst->split1_fd >= 0) { close(inst->split1_fd); inst->split1_fd = -1; }
-            if (inst->split2_fd >= 0) { close(inst->split2_fd); inst->split2_fd = -1; }
-            if (inst->split3_fd >= 0) { close(inst->split3_fd); inst->split3_fd = -1; }
-            if (inst->recv_fd >= 0) { close(inst->recv_fd); inst->recv_fd = -1; }
+            fork_log("[Fork IO] Config updated - mode: %s, split1_path: '%s', split2_path: '%s', split3_path: '%s', recv_path: '%s'",
+                     local_mode ? "receiver" : "splitter",
+                     local_split1_path, local_split2_path, local_split3_path, local_recv_path);
+
+            if (inst->split1_fd >= 0) { close(inst->split1_fd); inst->split1_fd = -1; fork_log("[Fork IO] Closed split1 FD"); }
+            if (inst->split2_fd >= 0) { close(inst->split2_fd); inst->split2_fd = -1; fork_log("[Fork IO] Closed split2 FD"); }
+            if (inst->split3_fd >= 0) { close(inst->split3_fd); inst->split3_fd = -1; fork_log("[Fork IO] Closed split3 FD"); }
+            if (inst->recv_fd >= 0) { close(inst->recv_fd); inst->recv_fd = -1; fork_log("[Fork IO] Closed recv FD"); }
             memset(&parser, 0, sizeof(parser));
             parser.state = STATE_READ_LEN;
 
@@ -341,10 +372,11 @@ static void* io_thread_func(void *arg) {
                     int fd = open(inst->split1_path, O_WRONLY | O_NONBLOCK);
                     if (fd >= 0) {
                         inst->split1_fd = fd;
+                        fork_log("[Fork IO] Opened split1 write pipe: %s", inst->split1_path);
                     }
                 }
             } else {
-                if (inst->split1_fd >= 0) { close(inst->split1_fd); inst->split1_fd = -1; }
+                if (inst->split1_fd >= 0) { close(inst->split1_fd); inst->split1_fd = -1; fork_log("[Fork IO] Closed split1 write pipe"); }
             }
 
             if (inst->split_oct_2 >= 0 && strcmp(inst->pipe_2_select, "off") != 0) {
@@ -353,10 +385,11 @@ static void* io_thread_func(void *arg) {
                     int fd = open(inst->split2_path, O_WRONLY | O_NONBLOCK);
                     if (fd >= 0) {
                         inst->split2_fd = fd;
+                        fork_log("[Fork IO] Opened split2 write pipe: %s", inst->split2_path);
                     }
                 }
             } else {
-                if (inst->split2_fd >= 0) { close(inst->split2_fd); inst->split2_fd = -1; }
+                if (inst->split2_fd >= 0) { close(inst->split2_fd); inst->split2_fd = -1; fork_log("[Fork IO] Closed split2 write pipe"); }
             }
 
             if (inst->split_oct_3 >= 0 && strcmp(inst->pipe_3_select, "off") != 0) {
@@ -365,10 +398,11 @@ static void* io_thread_func(void *arg) {
                     int fd = open(inst->split3_path, O_WRONLY | O_NONBLOCK);
                     if (fd >= 0) {
                         inst->split3_fd = fd;
+                        fork_log("[Fork IO] Opened split3 write pipe: %s", inst->split3_path);
                     }
                 }
             } else {
-                if (inst->split3_fd >= 0) { close(inst->split3_fd); inst->split3_fd = -1; }
+                if (inst->split3_fd >= 0) { close(inst->split3_fd); inst->split3_fd = -1; fork_log("[Fork IO] Closed split3 write pipe"); }
             }
 
             uint8_t msg[3];
@@ -382,9 +416,15 @@ static void* io_thread_func(void *arg) {
                         int written = write(inst->split1_fd, frame, len + 1);
                         if (written < 0) {
                             if (errno == EPIPE || errno == EBADF) {
+                                fork_log("[Fork IO] Split1 write error: %s (closing fd)", strerror(errno));
                                 close(inst->split1_fd);
                                 inst->split1_fd = -1;
                                 break;
+                            }
+                        } else {
+                            uint8_t type = msg[0] & 0xF0;
+                            if (type == 0x90 || type == 0x80) {
+                                fork_log("[Fork IO] Wrote split1: status=0x%02X, note=%d, vel=%d", msg[0], msg[1], msg[2]);
                             }
                         }
                     }
@@ -404,9 +444,15 @@ static void* io_thread_func(void *arg) {
                         int written = write(inst->split2_fd, frame, len + 1);
                         if (written < 0) {
                             if (errno == EPIPE || errno == EBADF) {
+                                fork_log("[Fork IO] Split2 write error: %s (closing fd)", strerror(errno));
                                 close(inst->split2_fd);
                                 inst->split2_fd = -1;
                                 break;
+                            }
+                        } else {
+                            uint8_t type = msg[0] & 0xF0;
+                            if (type == 0x90 || type == 0x80) {
+                                fork_log("[Fork IO] Wrote split2: status=0x%02X, note=%d, vel=%d", msg[0], msg[1], msg[2]);
                             }
                         }
                     }
@@ -426,9 +472,15 @@ static void* io_thread_func(void *arg) {
                         int written = write(inst->split3_fd, frame, len + 1);
                         if (written < 0) {
                             if (errno == EPIPE || errno == EBADF) {
+                                fork_log("[Fork IO] Split3 write error: %s (closing fd)", strerror(errno));
                                 close(inst->split3_fd);
                                 inst->split3_fd = -1;
                                 break;
+                            }
+                        } else {
+                            uint8_t type = msg[0] & 0xF0;
+                            if (type == 0x90 || type == 0x80) {
+                                fork_log("[Fork IO] Wrote split3: status=0x%02X, note=%d, vel=%d", msg[0], msg[1], msg[2]);
                             }
                         }
                     }
@@ -446,6 +498,9 @@ static void* io_thread_func(void *arg) {
                 int fd = open(inst->recv_path, O_RDONLY | O_NONBLOCK);
                 if (fd >= 0) {
                     inst->recv_fd = fd;
+                    fork_log("[Fork IO] Opened recv read pipe: %s", inst->recv_path);
+                } else {
+                    usleep(100000); // Sleep 100ms when waiting for writer/open
                 }
             }
 
@@ -466,17 +521,24 @@ static void* io_thread_func(void *arg) {
                                 parser.msg_data[parser.bytes_read++] = byte;
                                 if (parser.bytes_read == parser.msg_len) {
                                     ring_buffer_push(&inst->recv_ring_buf, parser.msg_data, parser.msg_len);
+                                    uint8_t type = parser.msg_data[0] & 0xF0;
+                                    if (type == 0x90 || type == 0x80) {
+                                        fork_log("[Fork IO] Read packet: status=0x%02X, note=%d, vel=%d",
+                                                 parser.msg_data[0], parser.msg_data[1], parser.msg_data[2]);
+                                    }
                                     parser.state = STATE_READ_LEN;
                                 }
                             }
                         }
                     } else if (ret == 0) {
-                        // EOF: Writer closed their end of the FIFO
+                        fork_log("[Fork IO] Recv pipe EOF (writer closed)");
                         close(inst->recv_fd);
                         inst->recv_fd = -1;
+                        usleep(100000); // Sleep 100ms when writer closes
                         break;
                     } else {
                         if (errno != EAGAIN && errno != EWOULDBLOCK) {
+                            fork_log("[Fork IO] Recv pipe read error: %s (closing fd)", strerror(errno));
                             close(inst->recv_fd);
                             inst->recv_fd = -1;
                         }
@@ -529,10 +591,10 @@ static void* fork_create_instance(const char *module_dir, const char *config_jso
     inst->split3_fd = -1;
     inst->recv_fd = -1;
 
-    resolve_pipe_path(inst->pipe_1_select, "midifork1", inst->split1_path, sizeof(inst->split1_path));
-    resolve_pipe_path(inst->pipe_2_select, "midifork2", inst->split2_path, sizeof(inst->split2_path));
-    resolve_pipe_path(inst->pipe_3_select, "midifork3", inst->split3_path, sizeof(inst->split3_path));
-    resolve_pipe_path(inst->recv_pipe_select, "midifork1", inst->recv_path, sizeof(inst->recv_path));
+    resolve_pipe_path(inst->pipe_1_select, "1", inst->split1_path, sizeof(inst->split1_path));
+    resolve_pipe_path(inst->pipe_2_select, "2", inst->split2_path, sizeof(inst->split2_path));
+    resolve_pipe_path(inst->pipe_3_select, "3", inst->split3_path, sizeof(inst->split3_path));
+    resolve_pipe_path(inst->recv_pipe_select, "1", inst->recv_path, sizeof(inst->recv_path));
 
     strcpy(inst->next_split1_path, inst->split1_path);
     strcpy(inst->next_split2_path, inst->split2_path);
@@ -633,6 +695,10 @@ static int fork_process_midi(void *instance,
             out_msgs[0][1] = (uint8_t)new_note;
             out_msgs[0][2] = vel_or_press;
             out_lens[0] = in_len;
+            if (type == 0x90 || type == 0x80) {
+                fork_log("[Fork DSP] Splitter: note %s forwarded to main (chan %d, note %d -> %d)",
+                         (type == 0x90 && vel_or_press > 0) ? "ON" : "OFF", orig_chan + 1, note, new_note);
+            }
             return 1;
         } else if (dest == 1) {
             int new_note = note;
@@ -640,6 +706,10 @@ static int fork_process_midi(void *instance,
             out_msg[0] = adjust_channel(status, inst->split1_chan);
             out_msg[1] = (uint8_t)new_note;
             out_msg[2] = vel_or_press;
+            if (type == 0x90 || type == 0x80) {
+                fork_log("[Fork DSP] Splitter: note %s sent to Split 1 (target chan %d, pipe %s, note %d)",
+                         (type == 0x90 && vel_or_press > 0) ? "ON" : "OFF", inst->split1_chan + 1, inst->pipe_1_select, note);
+            }
             if (strcmp(inst->pipe_1_select, "off") == 0) {
                 out_msgs[0][0] = out_msg[0];
                 out_msgs[0][1] = out_msg[1];
@@ -661,6 +731,10 @@ static int fork_process_midi(void *instance,
             out_msg[0] = adjust_channel(status, inst->split2_chan);
             out_msg[1] = (uint8_t)new_note;
             out_msg[2] = vel_or_press;
+            if (type == 0x90 || type == 0x80) {
+                fork_log("[Fork DSP] Splitter: note %s sent to Split 2 (target chan %d, pipe %s, note %d)",
+                         (type == 0x90 && vel_or_press > 0) ? "ON" : "OFF", inst->split2_chan + 1, inst->pipe_2_select, note);
+            }
             if (strcmp(inst->pipe_2_select, "off") == 0) {
                 out_msgs[0][0] = out_msg[0];
                 out_msgs[0][1] = out_msg[1];
@@ -682,6 +756,10 @@ static int fork_process_midi(void *instance,
             out_msg[0] = adjust_channel(status, inst->split3_chan);
             out_msg[1] = (uint8_t)new_note;
             out_msg[2] = vel_or_press;
+            if (type == 0x90 || type == 0x80) {
+                fork_log("[Fork DSP] Splitter: note %s sent to Split 3 (target chan %d, pipe %s, note %d)",
+                         (type == 0x90 && vel_or_press > 0) ? "ON" : "OFF", inst->split3_chan + 1, inst->pipe_3_select, note);
+            }
             if (strcmp(inst->pipe_3_select, "off") == 0) {
                 out_msgs[0][0] = out_msg[0];
                 out_msgs[0][1] = out_msg[1];
@@ -778,6 +856,27 @@ static int fork_tick(void *instance, int frames, int sample_rate,
         uint8_t msg[3];
         uint8_t len;
         while (count < max_out && ring_buffer_pop(&inst->recv_ring_buf, msg, &len)) {
+            if (len >= 1) {
+                uint8_t status = msg[0];
+                if (status >= 0x80 && status < 0xF0) {
+                    int tc = 0;
+                    if (g_host && g_host->slot_recv_channel) {
+                        int rc = g_host->slot_recv_channel(inst);
+                        if (rc >= 0 && rc < 16) {
+                            tc = rc;
+                        }
+                    }
+                    uint8_t old_chan = status & 0x0F;
+                    msg[0] = (status & 0xF0) | (uint8_t)tc;
+                    
+                    uint8_t type = msg[0] & 0xF0;
+                    if (type == 0x90 || type == 0x80) {
+                        fork_log("[Fork DSP] Receiver tick: note %s (mapped ch %d -> %d), note=%d, vel=%d",
+                                 (type == 0x90 && msg[2] > 0) ? "ON" : "OFF",
+                                 old_chan + 1, tc + 1, msg[1], msg[2]);
+                    }
+                }
+            }
             if (len >= 3) {
                 uint8_t status = msg[0];
                 uint8_t type = status & 0xF0;
@@ -924,7 +1023,8 @@ static void fork_set_param(void *instance, const char *key, const char *val) {
 
 static void format_octave_options(char *buf, size_t max_len, int min_index) {
     size_t len = snprintf(buf, max_len, "[\"off\"");
-    for (int i = min_index; i <= 9; i++) {
+    int start = (min_index < 2) ? 2 : min_index;
+    for (int i = start; i <= 11; i++) {
         const char *name = format_split_octave(i);
         if (len < max_len) {
             len += snprintf(buf + len, max_len - len, ",\"%s\"", name);
@@ -937,15 +1037,15 @@ static void format_octave_options(char *buf, size_t max_len, int min_index) {
 
 static int generate_dynamic_chain_params(fork_instance_t *inst, char *buf, int buf_len) {
     char opt1[128], opt2[128], opt3[128];
-    format_octave_options(opt1, sizeof(opt1), 0);
+    format_octave_options(opt1, sizeof(opt1), 2);
     
-    int min2 = (inst->split_oct_1 >= 0) ? (inst->split_oct_1 + 1) : 0;
+    int min2 = (inst->split_oct_1 >= 2) ? (inst->split_oct_1 + 1) : 2;
     format_octave_options(opt2, sizeof(opt2), min2);
     
-    int min3 = 0;
-    if (inst->split_oct_2 >= 0) {
+    int min3 = 2;
+    if (inst->split_oct_2 >= 2) {
         min3 = inst->split_oct_2 + 1;
-    } else if (inst->split_oct_1 >= 0) {
+    } else if (inst->split_oct_1 >= 2) {
         min3 = inst->split_oct_1 + 1;
     }
     format_octave_options(opt3, sizeof(opt3), min3);
@@ -960,10 +1060,10 @@ static int generate_dynamic_chain_params(fork_instance_t *inst, char *buf, int b
         "{\"key\":\"split_1_chan\",\"name\":\"Split 1 Chan\",\"type\":\"enum\",\"options\":[\"1\",\"2\",\"3\",\"4\",\"5\",\"6\",\"7\",\"8\",\"9\",\"10\",\"11\",\"12\",\"13\",\"14\",\"15\",\"16\"]},"
         "{\"key\":\"split_2_chan\",\"name\":\"Split 2 Chan\",\"type\":\"enum\",\"options\":[\"1\",\"2\",\"3\",\"4\",\"5\",\"6\",\"7\",\"8\",\"9\",\"10\",\"11\",\"12\",\"13\",\"14\",\"15\",\"16\"]},"
         "{\"key\":\"split_3_chan\",\"name\":\"Split 3 Chan\",\"type\":\"enum\",\"options\":[\"1\",\"2\",\"3\",\"4\",\"5\",\"6\",\"7\",\"8\",\"9\",\"10\",\"11\",\"12\",\"13\",\"14\",\"15\",\"16\"]},"
-        "{\"key\":\"pipe_1_select\",\"name\":\"Pipe 1\",\"type\":\"enum\",\"options\":[\"off\",\"1\",\"2\",\"3\",\"4\",\"5\",\"6\",\"7\",\"8\"]},"
-        "{\"key\":\"pipe_2_select\",\"name\":\"Pipe 2\",\"type\":\"enum\",\"options\":[\"off\",\"1\",\"2\",\"3\",\"4\",\"5\",\"6\",\"7\",\"8\"]},"
-        "{\"key\":\"pipe_3_select\",\"name\":\"Pipe 3\",\"type\":\"enum\",\"options\":[\"off\",\"1\",\"2\",\"3\",\"4\",\"5\",\"6\",\"7\",\"8\"]},"
-        "{\"key\":\"recv_pipe_select\",\"name\":\"Recv Pipe\",\"type\":\"enum\",\"options\":[\"1\",\"2\",\"3\",\"4\",\"5\",\"6\",\"7\",\"8\"]}"
+        "{\"key\":\"pipe_1_select\",\"name\":\"Pipe 1\",\"type\":\"enum\",\"options\":[\"off\",\"1\",\"2\",\"3\",\"4\"]},"
+        "{\"key\":\"pipe_2_select\",\"name\":\"Pipe 2\",\"type\":\"enum\",\"options\":[\"off\",\"1\",\"2\",\"3\",\"4\"]},"
+        "{\"key\":\"pipe_3_select\",\"name\":\"Pipe 3\",\"type\":\"enum\",\"options\":[\"off\",\"1\",\"2\",\"3\",\"4\"]},"
+        "{\"key\":\"recv_pipe_select\",\"name\":\"Recv Pipe\",\"type\":\"enum\",\"options\":[\"1\",\"2\",\"3\",\"4\"]}"
         "]",
         opt1, opt2, opt3
     );

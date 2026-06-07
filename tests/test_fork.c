@@ -17,6 +17,11 @@ static void fail(const char *msg) {
     exit(1);
 }
 
+static int test_slot_recv_channel(void *instance) {
+    (void)instance;
+    return 1; // Return index 1 (MIDI Channel 2)
+}
+
 int main(void) {
     host_api_v1_t host;
     midi_fx_api_v1_t *api;
@@ -25,6 +30,7 @@ int main(void) {
 
     memset(&host, 0, sizeof(host));
     host.api_version = MOVE_PLUGIN_API_VERSION;
+    host.slot_recv_channel = test_slot_recv_channel;
 
     api = move_midi_fx_init(&host);
     if (!api || !api->create_instance || !api->set_param || !api->get_param || !api->destroy_instance) {

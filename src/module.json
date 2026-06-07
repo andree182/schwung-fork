@@ -2,7 +2,7 @@
   "api_version": 1,
   "id": "fork",
   "name": "Fork",
-  "abbrev": "Fork",
+  "abbrev": "FO",
   "version": "1.0.0",
   "builtin": false,
   "capabilities": {
@@ -45,16 +45,16 @@
   },
   "chain_params": [
     { "key": "mode", "name": "Mode", "type": "enum", "options": ["splitter", "receiver"] },
-    { "key": "split_oct_1", "name": "Split 1 Oct", "type": "enum", "options": ["off", "C-1", "C0", "C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8"] },
-    { "key": "split_oct_2", "name": "Split 2 Oct", "type": "enum", "options": ["off", "C-1", "C0", "C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8"] },
-    { "key": "split_oct_3", "name": "Split 3 Oct", "type": "enum", "options": ["off", "C-1", "C0", "C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8"] },
+    { "key": "split_oct_1", "name": "Split 1 Oct", "type": "enum", "options": ["off", "C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9", "C10"] },
+    { "key": "split_oct_2", "name": "Split 2 Oct", "type": "enum", "options": ["off", "C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9", "C10"] },
+    { "key": "split_oct_3", "name": "Split 3 Oct", "type": "enum", "options": ["off", "C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9", "C10"] },
     { "key": "transpose", "name": "Transpose", "type": "int", "min": -10, "max": 10, "step": 1 },
     { "key": "split_1_chan", "name": "Split 1 Chan", "type": "enum", "options": ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16"] },
     { "key": "split_2_chan", "name": "Split 2 Chan", "type": "enum", "options": ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16"] },
     { "key": "split_3_chan", "name": "Split 3 Chan", "type": "enum", "options": ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16"] },
-    { "key": "pipe_1_select", "name": "Pipe 1", "type": "enum", "options": ["off", "1", "2", "3", "4", "5", "6", "7", "8"] },
-    { "key": "pipe_2_select", "name": "Pipe 2", "type": "enum", "options": ["off", "1", "2", "3", "4", "5", "6", "7", "8"] },
-    { "key": "pipe_3_select", "name": "Pipe 3", "type": "enum", "options": ["off", "1", "2", "3", "4", "5", "6", "7", "8"] },
-    { "key": "recv_pipe_select", "name": "Recv Pipe", "type": "enum", "options": ["1", "2", "3", "4", "5", "6", "7", "8"] }
+    { "key": "pipe_1_select", "name": "Pipe 1", "type": "enum", "options": ["off", "1", "2", "3", "4"] },
+    { "key": "pipe_2_select", "name": "Pipe 2", "type": "enum", "options": ["off", "1", "2", "3", "4"] },
+    { "key": "pipe_3_select", "name": "Pipe 3", "type": "enum", "options": ["off", "1", "2", "3", "4"] },
+    { "key": "recv_pipe_select", "name": "Recv Pipe", "type": "enum", "options": ["1", "2", "3", "4"] }
   ]
 }
