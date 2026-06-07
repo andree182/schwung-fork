@@ -61,10 +61,10 @@ int main(void) {
     api->set_param(inst, "mode", "splitter");
     assert(fork_inst->mode == 0);
 
-    api->set_param(inst, "split_oct_1", "C3"); // Octave 4, Note 48
-    assert(fork_inst->split_oct_1 == 4);
-    api->set_param(inst, "split_oct_2", "C4"); // Octave 5, Note 60
-    assert(fork_inst->split_oct_2 == 5);
+    api->set_param(inst, "split_oct_1", "C3"); // Octave 3, Note 48
+    assert(fork_inst->split_oct_1 == 3);
+    api->set_param(inst, "split_oct_2", "C4"); // Octave 4, Note 60
+    assert(fork_inst->split_oct_2 == 4);
 
     api->set_param(inst, "split_oct_1", "off");
     assert(fork_inst->split_oct_1 == -1);
@@ -103,8 +103,8 @@ int main(void) {
     api->set_param(inst, "pipe_3_select", "4");
     assert(strcmp(fork_inst->pipe_3_select, "4") == 0);
 
-    api->set_param(inst, "split_oct_3", "C5"); // Octave 6, Note 72
-    assert(fork_inst->split_oct_3 == 6);
+    api->set_param(inst, "split_oct_3", "C5"); // Octave 5, Note 72
+    assert(fork_inst->split_oct_3 == 5);
 
     // 3. Test Routing in Splitter Mode
     // split_oct_1 = C3 (48), split_oct_2 = C4 (60)
@@ -241,6 +241,74 @@ int main(void) {
     assert(count == 1);
     assert(out_msgs[0][0] == 0x91); // Kept Channel 2 as-is
     assert(out_msgs[0][1] == 72);   // 60 + 12 = 72
+
+    // 7. Test Receiver Mode Fallthrough
+    api->set_param(inst, "fallthrough", "off");
+    uint8_t incoming_midi[3] = { 0x90, 60, 100 };
+    count = api->process_midi(inst, incoming_midi, 3, out_msgs, out_lens, 16);
+    assert(count == 0); // Blocked by default
+
+    api->set_param(inst, "fallthrough", "on");
+    count = api->process_midi(inst, incoming_midi, 3, out_msgs, out_lens, 16);
+    assert(count == 1); // Forwarded
+    assert(out_msgs[0][0] == 0x90);
+    assert(out_msgs[0][1] == 60);
+    assert(out_msgs[0][2] == 100);
+
+    api->set_param(inst, "fallthrough", "off");
+    count = api->process_midi(inst, incoming_midi, 3, out_msgs, out_lens, 16);
+    assert(count == 0); // Blocked again
+
+    // 8. Test Split 1 Routing when Split 2/3 are Off (verifies all higher octaves route to Split 1)
+    api->set_param(inst, "mode", "splitter");
+    api->set_param(inst, "transpose", "0");
+    api->set_param(inst, "split_oct_1", "C4"); // threshold = 60
+    api->set_param(inst, "split_oct_2", "off");
+    api->set_param(inst, "split_oct_3", "off");
+    api->set_param(inst, "pipe_1_select", "off"); // play on track for simple testing
+    
+    // Note 55 (G3 < 60) -> Main track (un-redirected)
+    uint8_t note_main_55[3] = { 0x90, 55, 100 };
+    count = api->process_midi(inst, note_main_55, 3, out_msgs, out_lens, 16);
+    assert(count == 1);
+    assert(out_msgs[0][0] == 0x90);
+    assert(out_msgs[0][1] == 55);
+
+    // Note 65 (F4 >= 60) -> Split 1
+    uint8_t note_s1_65[3] = { 0x90, 65, 100 };
+    count = api->process_midi(inst, note_s1_65, 3, out_msgs, out_lens, 16);
+    assert(count == 1);
+    assert(out_msgs[0][0] == 0x99); // re-channeled to Split 1 channel (9)
+    assert(out_msgs[0][1] == 65);
+
+    // Note 80 (Ab5 >= 60, next octave) -> Split 1
+    uint8_t note_s1_80[3] = { 0x90, 80, 100 };
+    count = api->process_midi(inst, note_s1_80, 3, out_msgs, out_lens, 16);
+    assert(count == 1);
+    assert(out_msgs[0][0] == 0x99); // re-channeled to Split 1 channel (9)
+    assert(out_msgs[0][1] == 80);
+
+    // Note 95 (B6 >= 60, two octaves up) -> Split 1
+    uint8_t note_s1_95[3] = { 0x90, 95, 100 };
+    count = api->process_midi(inst, note_s1_95, 3, out_msgs, out_lens, 16);
+    assert(count == 1);
+    assert(out_msgs[0][0] == 0x99); // re-channeled to Split 1 channel (9)
+    assert(out_msgs[0][1] == 95);
+
+    // 9. Test Index-Based Parameter Parsing with shifting dynamic options
+    // Setting Split 1 to "C5" (index 5)
+    api->set_param(inst, "split_oct_1", "5");
+    assert(fork_inst->split_oct_1 == 5); // C5 (index 5 in opt1)
+
+    // Option list for Split 2 shifts to starting at C6 (min_oct=5)
+    // index 1 should map to C6 (5 + 1 = 6)
+    api->set_param(inst, "split_oct_2", "1");
+    assert(fork_inst->split_oct_2 == 6); // C6
+
+    // Option list for Split 3 shifts to starting at C7 (min_oct=6)
+    // index 1 should map to C7 (6 + 1 = 7)
+    api->set_param(inst, "split_oct_3", "1");
+    assert(fork_inst->split_oct_3 == 7); // C7
 
     api->destroy_instance(inst);
     printf("PASS: Fork unit tests\n");

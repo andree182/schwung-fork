@@ -23,8 +23,8 @@
       },
       "global": {
         "name": "Global Settings",
-        "params": ["mode", "transpose", "recv_pipe_select"],
-        "knobs": ["mode", "transpose", "recv_pipe_select"]
+        "params": ["mode", "transpose", "recv_pipe_select", "fallthrough"],
+        "knobs": ["mode", "transpose", "recv_pipe_select", "fallthrough"]
       },
       "split1": {
         "name": "Split 1 Settings",
@@ -55,6 +55,7 @@
     { "key": "pipe_1_select", "name": "Pipe 1", "type": "enum", "options": ["off", "1", "2", "3", "4"] },
     { "key": "pipe_2_select", "name": "Pipe 2", "type": "enum", "options": ["off", "1", "2", "3", "4"] },
     { "key": "pipe_3_select", "name": "Pipe 3", "type": "enum", "options": ["off", "1", "2", "3", "4"] },
-    { "key": "recv_pipe_select", "name": "Recv Pipe", "type": "enum", "options": ["1", "2", "3", "4"] }
+    { "key": "recv_pipe_select", "name": "Recv Pipe", "type": "enum", "options": ["1", "2", "3", "4"] },
+    { "key": "fallthrough", "name": "Fallthrough", "type": "enum", "options": ["off", "on"] }
   ]
 }
