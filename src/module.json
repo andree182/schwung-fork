@@ -3,7 +3,7 @@
   "id": "fork",
   "name": "Fork",
   "abbrev": "FO",
-  "version": "1.0.0",
+  "version": "1.1",
   "builtin": false,
   "capabilities": {
     "chainable": true,
