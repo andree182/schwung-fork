@@ -18,27 +18,40 @@
           { "label": "Split 1", "level": "split1" },
           { "label": "Split 2", "level": "split2" },
           { "label": "Split 3", "level": "split3" }
-        ],
+        ,
+          { "key": "split_oct_1", "short_name": "Oct 1" },
+          { "key": "split_oct_2", "short_name": "Oct 2" },
+          { "key": "split_oct_3", "short_name": "Oct 3" }],
         "knobs": ["mode", "split_oct_1", "split_oct_2", "split_oct_3"]
       },
       "global": {
         "name": "Global Settings",
-        "params": ["mode", "transpose", "recv_pipe_select", "fallthrough"],
+        "params": ["mode", "transpose", "recv_pipe_select", "fallthrough",
+        { "key": "recv_pipe_select", "short_name": "Pipe" }],
         "knobs": ["mode", "transpose", "recv_pipe_select", "fallthrough"]
       },
       "split1": {
         "name": "Split 1 Settings",
-        "params": ["split_oct_1", "split_1_chan", "pipe_1_select"],
+        "params": ["split_oct_1", "split_1_chan", "pipe_1_select",
+        { "key": "split_oct_1", "short_name": "Oct 1" },
+        { "key": "split_1_chan", "short_name": "Chan" },
+        { "key": "pipe_1_select", "short_name": "Pipe" }],
         "knobs": ["split_oct_1", "split_1_chan", "pipe_1_select"]
       },
       "split2": {
         "name": "Split 2 Settings",
-        "params": ["split_oct_2", "split_2_chan", "pipe_2_select"],
+        "params": ["split_oct_2", "split_2_chan", "pipe_2_select",
+        { "key": "split_oct_2", "short_name": "Oct 2" },
+        { "key": "split_2_chan", "short_name": "Chan" },
+        { "key": "pipe_2_select", "short_name": "Pipe" }],
         "knobs": ["split_oct_2", "split_2_chan", "pipe_2_select"]
       },
       "split3": {
         "name": "Split 3 Settings",
-        "params": ["split_oct_3", "split_3_chan", "pipe_3_select"],
+        "params": ["split_oct_3", "split_3_chan", "pipe_3_select",
+        { "key": "split_oct_3", "short_name": "Oct 3" },
+        { "key": "split_3_chan", "short_name": "Chan" },
+        { "key": "pipe_3_select", "short_name": "Pipe" }],
         "knobs": ["split_oct_3", "split_3_chan", "pipe_3_select"]
       }
     }
