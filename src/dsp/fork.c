@@ -3,6 +3,9 @@
  * Splits an input MIDI stream into multiple channels or pipe streams based on pitch thresholds.
  */
 
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE   /* CPU_SET for the IO thread's affinity */
+#endif
 #ifndef _XOPEN_SOURCE
 #define _XOPEN_SOURCE 500
 #endif
@@ -24,6 +27,8 @@
 #include <sys/types.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <sched.h>
+#include <sys/prctl.h>
 #include <signal.h>
 #include <time.h>
 #include <sys/time.h>
@@ -316,8 +321,45 @@ static void cache_chain_params_from_module_json(fork_instance_t *inst, const cha
     free(json);
 }
 
+/*
+ * The IO thread ASKS for its scheduling instead of inheriting it.
+ *
+ * It moves MIDI between the pipes and the track, so its latency is the
+ * module's timing -- but what it inherited was whatever thread ran
+ * create_instance: Schwung's SPI audio callback (SCHED_FIFO 70, core 3) on
+ * hosts that build modules there, a SCHED_OTHER loader thread on hosts that
+ * build them off the callback, where it can be held off for tens of ms under
+ * load. FIFO 70 on core 3 was no better: it shared the audio callback's core
+ * and sat above Move's Link Main (FIFO 35).
+ *
+ * So: SCHED_FIFO 20 -- realtime, below Move's own threads -- on cores 0-2.
+ * The 1 ms poll sleeps between passes, so it costs ~1k wakeups/s, not a
+ * busy core. The Move process has CAP_SYS_NICE; refused, the thread keeps
+ * what it inherited. sched_* / prctl on the calling thread (pid 0) rather
+ * than the pthread_*_np calls, which keeps the GLIBC_2.17 baseline the
+ * symver pins above exist for.
+ */
+static void io_thread_setup(void) {
+#ifdef __linux__
+    struct sched_param sp;
+    memset(&sp, 0, sizeof(sp));
+    sp.sched_priority = 20;
+    sched_setscheduler(0, SCHED_FIFO, &sp);
+
+    cpu_set_t set;
+    CPU_ZERO(&set);
+    CPU_SET(0, &set);
+    CPU_SET(1, &set);
+    CPU_SET(2, &set);
+    sched_setaffinity(0, sizeof(set), &set);
+
+    prctl(PR_SET_NAME, "fork-io", 0, 0, 0);
+#endif
+}
+
 static void* io_thread_func(void *arg) {
     fork_instance_t *inst = (fork_instance_t *)arg;
+    io_thread_setup();
     fifo_parser_t parser;
     memset(&parser, 0, sizeof(parser));
     parser.state = STATE_READ_LEN;
